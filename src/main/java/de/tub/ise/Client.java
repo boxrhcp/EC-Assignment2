@@ -70,7 +70,7 @@ public class Client {
   public static void main(String[] args) throws Exception {
 
     // Change client host and port accordingly
-    Client client = new Client("localhost", 8082);
+    Client client = new Client("localhost", 8081);
 
     try {
       client.put("123", "Maria Borges, TU Berlin");

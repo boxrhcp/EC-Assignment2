@@ -3,6 +3,8 @@ package de.tub.ise;
 import java.util.HashMap;
 
 import org.apache.log4j.Logger;
+//import de.tub.ise.KeyValuePair;
+import de.tub.ise.KeyValueStoreGrpc.KeyValueStoreStub;
 
 import io.grpc.*;
 
@@ -10,6 +12,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     private final int qwritesize;
     private final int qreadsize;
     private final HashMap<String, String> otherNodes;
+    private final HashMap<String, KeyValueStoreStub> otherStubs;
     static Logger logger = Logger.getLogger(QuorumImpl.class.getName());
 
     /**
@@ -19,13 +22,14 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         this.qwritesize = KVNodeMain.config.getWriteQuorum();
         this.qreadsize = KVNodeMain.config.getReadQuorum();
         this.otherNodes = KVNodeMain.config.getOtherNodes(KVNodeMain.config.thisNode());
-
+        this.otherStubs = new HashMap<String,KeyValueStoreStub>();
         for (HashMap.Entry<String, String> entry : otherNodes.entrySet()) {
             String node = entry.getKey();
             String host = entry.getValue().split(":")[0];
             int port = Integer.parseInt(entry.getValue().split(":")[1]);
-
             // TODO create async stubs for communication between nodes
+            otherStubs.put(node,KeyValueStoreGrpc.newStub(
+                    ManagedChannelBuilder.forAddress(host, port).usePlaintext().build()));
         }
 
     }
@@ -89,6 +93,12 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     @Override
     public void delete(de.tub.ise.Key request, io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
         // TODO delete request akin to put request
+        String key = request.getKey();
+        Response response;
+        response = Response.newBuilder().setSuccess(true).setKey(key).build();
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
     }
 
     /**
@@ -99,6 +109,19 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     public void replicate(de.tub.ise.KeyValuePair request,
             io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
         // TODO handle replication requests from other nodes
+        String key = request.getKey();
+        String value = request.getValue();
+
+        Response response;
+
+        logger.debug("Received replicate request with key " + key);
+        Memory.put(key, value);
+
+        response = Response.newBuilder().setSuccess(true).setKey(key).build();
+        logger.debug("Telling the node that we replicated");
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
     }
 
     /**
@@ -107,7 +130,23 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
      */
     @Override
     public void getReplica(de.tub.ise.Key request, io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
-        // TODO handle request for local replica from ther nodes
+        // TODO handle request for local replica from other nodes
+        String key = request.getKey();
+        Response response;
+
+        logger.debug("Received getReplica request with key" + key);
+
+        KeyValuePair data = gatherdata(key);
+        if (data == null) {
+            response = Response.newBuilder().setSuccess(false).setKey(key).build();
+            logger.warn("Uh oh, couldn't get data :(");
+        } else {
+            response = Response.newBuilder().setSuccess(true).setKey(data.getKey()).setValue(data.getValue()).build();
+            logger.debug("Giving node the requested replica data");
+        }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
     }
 
     /**
@@ -118,6 +157,12 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     public void deleteReplica(de.tub.ise.Key request,
             io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
         // TODO handle delete requests from other nodes, akin to write requests
+        String key = request.getKey();
+        Response response;
+        response = Response.newBuilder().setSuccess(true).setKey(key).build();
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
     }
 
     /**
@@ -132,11 +177,35 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
 
         if (qwritesize > 1) {
             // TODO send async. replication requests to nodes
+           /* for (HashMap.Entry<String, KeyValueStoreStub> entry : otherStubs.entrySet()) {
+                KeyValuePair request = KeyValuePair.newBuilder().setKey(key).setValue(value).build();
+                Response response;
+                try {
+                    response = entry.getValue().replicate(request);
+                } catch (StatusRuntimeException e) {
+                    logger.error("Error when sending request to " + entry.getKey());
+                    continue;
+                }
+                System.out.println("Success? " + response.getSuccess());
+                if (response.getSuccess()) {
+                    System.out.println("Value: " + response.getValue());
+                }
+            }*/
             // TODO reach write quorum and only then issue client response
-            // Timeout after 20s
+            // Timeout after 20s checkear con un while meintras no tengan la repuesta y no pasen 20s
             return false;
         } else
             // TODO send async. replication requests to nodes
+            /*for (HashMap.Entry<String, KeyValueStoreStub> entry : otherStubs.entrySet()) {
+                KeyValuePair request = KeyValuePair.newBuilder().setKey(key).setValue(value).build();
+                Response response;
+                try {
+                    response = entry.getValue().put(request);
+                } catch (StatusRuntimeException e) {
+                    logger.error("Error when sending request to " + entry.getKey());
+                    continue;
+                }
+            }*/
             // But already issue response to client
             return true;
     }
