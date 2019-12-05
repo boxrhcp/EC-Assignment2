@@ -4,7 +4,7 @@ import java.util.HashMap;
 
 import org.apache.log4j.Logger;
 //import de.tub.ise.KeyValuePair;
-import de.tub.ise.KeyValueStoreGrpc.KeyValueStoreStub;
+
 
 import io.grpc.*;
 
@@ -12,7 +12,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     private final int qwritesize;
     private final int qreadsize;
     private final HashMap<String, String> otherNodes;
-    private final HashMap<String, KeyValueStoreStub> otherStubs;
+    private final HashMap<String, NodeClient> otherServer;
     static Logger logger = Logger.getLogger(QuorumImpl.class.getName());
 
     /**
@@ -22,14 +22,14 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         this.qwritesize = KVNodeMain.config.getWriteQuorum();
         this.qreadsize = KVNodeMain.config.getReadQuorum();
         this.otherNodes = KVNodeMain.config.getOtherNodes(KVNodeMain.config.thisNode());
-        this.otherStubs = new HashMap<String,KeyValueStoreStub>();
+        this.otherServer = new HashMap<>();
         for (HashMap.Entry<String, String> entry : otherNodes.entrySet()) {
             String node = entry.getKey();
             String host = entry.getValue().split(":")[0];
             int port = Integer.parseInt(entry.getValue().split(":")[1]);
             // TODO create async stubs for communication between nodes
-            otherStubs.put(node,KeyValueStoreGrpc.newStub(
-                    ManagedChannelBuilder.forAddress(host, port).usePlaintext().build()));
+            logger.info(host + ":" + port);
+            otherServer.put(node, new NodeClient(host,port));
         }
 
     }
@@ -158,9 +158,9 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
         // TODO handle delete requests from other nodes, akin to write requests
         String key = request.getKey();
+        Memory.delete(key);
         Response response;
         response = Response.newBuilder().setSuccess(true).setKey(key).build();
-
         responseObserver.onNext(response);
         responseObserver.onCompleted();
     }
@@ -177,35 +177,17 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
 
         if (qwritesize > 1) {
             // TODO send async. replication requests to nodes
-           /* for (HashMap.Entry<String, KeyValueStoreStub> entry : otherStubs.entrySet()) {
-                KeyValuePair request = KeyValuePair.newBuilder().setKey(key).setValue(value).build();
-                Response response;
-                try {
-                    response = entry.getValue().replicate(request);
-                } catch (StatusRuntimeException e) {
-                    logger.error("Error when sending request to " + entry.getKey());
-                    continue;
-                }
-                System.out.println("Success? " + response.getSuccess());
-                if (response.getSuccess()) {
-                    System.out.println("Value: " + response.getValue());
-                }
-            }*/
+            for (HashMap.Entry<String, NodeClient> entry : otherServer.entrySet()) {
+                entry.getValue().replicate(key,value);
+            }
             // TODO reach write quorum and only then issue client response
             // Timeout after 20s checkear con un while meintras no tengan la repuesta y no pasen 20s
             return false;
         } else
             // TODO send async. replication requests to nodes
-            /*for (HashMap.Entry<String, KeyValueStoreStub> entry : otherStubs.entrySet()) {
-                KeyValuePair request = KeyValuePair.newBuilder().setKey(key).setValue(value).build();
-                Response response;
-                try {
-                    response = entry.getValue().put(request);
-                } catch (StatusRuntimeException e) {
-                    logger.error("Error when sending request to " + entry.getKey());
-                    continue;
-                }
-            }*/
+            for (HashMap.Entry<String, NodeClient> entry : otherServer.entrySet()) {
+                entry.getValue().replicate(key,value);
+            }
             // But already issue response to client
             return true;
     }
