@@ -1,4 +1,4 @@
-<quorum qwrite="2" qread="2">
+<quorum qwrite="3" qread="1">
 	<host node="nodeA" ip="54.235.226.177:8081"/>
 	<host node="nodeB" ip="3.120.98.216:8082"/>
 	<host node="nodeC" ip="18.184.24.35:8083"/>
