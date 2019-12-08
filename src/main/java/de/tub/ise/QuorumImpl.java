@@ -240,6 +240,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
                 logger.debug("Data replication reached quorum");
                 return true;
             } else {
+                Memory.delete(key);
                 logger.warn("Data replication failed. Quorum not reached");
                 return false;
             }

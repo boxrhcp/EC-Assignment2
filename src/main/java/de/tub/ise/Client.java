@@ -5,6 +5,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 
+import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -73,8 +74,45 @@ public class Client {
     Client client = new Client("localhost", 8081);
 
     try {
-      client.put("123", "Maria Borges, TU Berlin");
-      client.get("123");
+      long [] putLat = new long [100];
+      for(int i = 0; i<100; i++){
+        long start = System.nanoTime();
+        client.put(""+i, "Test: " + i);
+        putLat[i] = System.nanoTime() - start;
+      }
+      long [] getLat = new long [100];
+      for(int i = 0; i<100; i++){
+        long start = System.nanoTime();
+        client.get(""+i);
+        putLat[i] = System.nanoTime() - start;
+      }
+      long maxPut = 0l;
+      long maxGet = 0l;
+      long minPut = 0l;
+      long minGet = 0l;
+      long avgPut = 0l;
+      long avgGet = 0l;
+      for(int i = 0; i<100; i++){
+        long put = putLat[i];
+        long get = getLat[i];
+        if(put>maxPut) maxPut = put;
+        if(put<minPut) minPut = put;
+        if(get>maxGet) maxGet = get;
+        if(get<minGet) minGet = get;
+        avgPut += put;
+        avgGet += get;
+      }
+      double avPut = avgPut/100.0;
+      double avGet = avgGet/100.0;
+      System.out.println("Results of execution: ");
+      System.out.println("PUT - max: " + maxPut + "ns min: "
+              + minPut + "ns avg: "
+              + avPut + "ns");
+      System.out.println("GET - max: " + maxGet 
+              + "ns min: " + minGet + "ns avg: "
+              + avGet + "ns");
+
+
     } finally {
       client.shutdown();
     }
