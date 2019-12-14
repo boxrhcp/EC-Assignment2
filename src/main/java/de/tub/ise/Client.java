@@ -78,6 +78,7 @@ public class Client {
     }
 
     public static void main(String[] args) throws Exception {
+        //no need to measure delete, no need to deal with inconsistencies
         String[] nodes = {"nodeA:54.235.226.177:8081", "nodeB:3.120.98.216:8082",
                 "nodeC:18.184.24.35:8083"};
         // Change client host and port accordingly

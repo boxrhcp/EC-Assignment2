@@ -33,7 +33,6 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             String node = entry.getKey();
             String host = entry.getValue().split(":")[0];
             int port = Integer.parseInt(entry.getValue().split(":")[1]);
-            // TODO create async stubs for communication between nodes
             logger.info(host + ":" + port);
             otherServer.put(node, KeyValueStoreGrpc.newStub(ManagedChannelBuilder.forAddress(host, port)
                     .usePlaintext().build()));
@@ -99,14 +98,21 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
      */
     @Override
     public void delete(de.tub.ise.Key request, io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
-        // TODO delete request akin to put request
         String key = request.getKey();
+        logger.debug("Received delete request with key " + key);
         Response response;
-        response = Response.newBuilder().setSuccess(true).setKey(key).build();
+        if (replicateDelete(key)) {
+            response = Response.newBuilder().setSuccess(true).setKey(key).build();
+            logger.debug("Telling the client that we deleted");
+        } else {
+            response = Response.newBuilder().setSuccess(false).setKey(key).build();
+            logger.warn("Uh oh, delete not possible :(");
+        }
 
         responseObserver.onNext(response);
         responseObserver.onCompleted();
     }
+
 
     /**
      * Implementation of replicate method specified in the .proto file. You can use
@@ -116,8 +122,8 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     public void replicate(de.tub.ise.KeyValuePair request,
                           io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
         // handle replication requests from other nodes
-        final String key = request.getKey();
-        final String value = request.getValue();
+        String key = request.getKey();
+        String value = request.getValue();
         Response response;
 
         // Set ctx as the current context within the Runnable
@@ -129,7 +135,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             response = Response.newBuilder().setSuccess(true).setKey(key).build();
             logger.debug("Telling the node that we replicated");
             responseObserver.onNext(response);
-        }catch(Exception e){
+        } catch (Exception e) {
             responseObserver.onError(e);
         } finally {
             forked.detach(old);
@@ -161,7 +167,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
                 logger.debug("Giving node the requested replica data for key: " + key);
             }
             responseObserver.onNext(response);
-        }catch(Exception e){
+        } catch (Exception e) {
             responseObserver.onError(e);
         } finally {
             forked.detach(old);
@@ -176,13 +182,24 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     @Override
     public void deleteReplica(de.tub.ise.Key request,
                               io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
-        // TODO handle delete requests from other nodes, akin to write requests
         String key = request.getKey();
-        Memory.delete(key);
         Response response;
-        response = Response.newBuilder().setSuccess(true).setKey(key).build();
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
+
+        // Set ctx as the current context within the Runnable
+        Context forked = Context.current().fork();
+        Context old = forked.attach();
+        try {
+            logger.debug("Received replicate delete request with key " + key);
+            Memory.delete(key);
+            response = Response.newBuilder().setSuccess(true).setKey(key).build();
+            logger.debug("Telling the node that we deleted");
+            responseObserver.onNext(response);
+        } catch (Exception e) {
+            responseObserver.onError(e);
+        } finally {
+            forked.detach(old);
+            responseObserver.onCompleted();
+        }
     }
 
     /**
@@ -240,7 +257,6 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
                 logger.debug("Data replication reached quorum");
                 return true;
             } else {
-                Memory.delete(key);
                 logger.warn("Data replication failed. Quorum not reached");
                 return false;
             }
@@ -297,7 +313,6 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             } catch (InterruptedException e) {
                 logger.error("Quorum timer failed");
             }
-            // TODO reach read quorum with matching values and issue client response
             int quorum = 1;
             for (Response result : results) {
                 if (result.getSuccess() && data.equals(result.getValue())) {
@@ -321,6 +336,62 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         }
     }
 
+    private boolean replicateDelete(String key) {
+        Memory.delete(key);
+        Key request = Key.newBuilder().setKey(key).build();
+        List<Response> results = new ArrayList<Response>();
+        final CountDownLatch finishLatch = new CountDownLatch(qwritesize - 1);
+        StreamObserver<Response> responses = new StreamObserver<Response>() {
+            @Override
+            public void onNext(Response response) {
+                logger.info("Replica deleted " + response.getSuccess());
+                if (response.getSuccess()) results.add(response);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                logger.warn("Delete replica failed: " + t.getMessage());
+                finishLatch.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                logger.info("Finished delete replica");
+                finishLatch.countDown();
+            }
+        };
+
+        // send async. replication requests to nodes
+        for (HashMap.Entry<String, KeyValueStoreStub> entry : otherServer.entrySet()) {
+            entry.getValue().deleteReplica(request, responses);
+        }
+
+        if (qwritesize > 1) {
+            try {
+                // Wait until minimum quorum reached or Timeout after 20s
+                finishLatch.await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                logger.error("Quorum timer failed");
+            }
+            // reach read quorum with matching values and issue client response
+            int quorum = 1;
+            for (Response result : results) {
+                if (result.getSuccess()) {
+                    quorum++;
+                }
+            }
+            // reach write quorum and only then issue client response
+            if (quorum >= qwritesize) {
+                logger.debug("Delete replication reached quorum");
+                return true;
+            } else {
+                logger.warn("Delete replication failed. Quorum not reached");
+                return false;
+            }
+        } else
+            // But already issue response to client
+            return true;
+    }
     // etc..
 
 }
