@@ -34,10 +34,10 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             String host = entry.getValue().split(":")[0];
             int port = Integer.parseInt(entry.getValue().split(":")[1]);
             logger.info(host + ":" + port);
+            //Create the async stubs of the other nodes
             otherServer.put(node, KeyValueStoreGrpc.newStub(ManagedChannelBuilder.forAddress(host, port)
                     .usePlaintext().build()));
         }
-
     }
 
     /**
@@ -101,6 +101,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         String key = request.getKey();
         logger.debug("Received delete request with key " + key);
         Response response;
+        // If delete was replicated answer true, if failure answer fail
         if (replicateDelete(key)) {
             response = Response.newBuilder().setSuccess(true).setKey(key).build();
             logger.debug("Telling the client that we deleted");
@@ -121,12 +122,14 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
     @Override
     public void replicate(de.tub.ise.KeyValuePair request,
                           io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
-        // handle replication requests from other nodes
         String key = request.getKey();
         String value = request.getValue();
         Response response;
 
-        // Set ctx as the current context within the Runnable
+        /** Asynchronously, writes and generates the answer of the replication request.
+         * Once the execution of the request has finished, it calls the streamObserver methods
+         * If there is any failure it also calls onError method from the observer.
+         */
         Context forked = Context.current().fork();
         Context old = forked.attach();
         try {
@@ -149,12 +152,15 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
      */
     @Override
     public void getReplica(de.tub.ise.Key request, io.grpc.stub.StreamObserver<de.tub.ise.Response> responseObserver) {
-        //handle request for local replica from other nodes
         String key = request.getKey();
         Response response;
         String data = null;
         logger.debug("Received getReplica request with key" + key);
 
+        /** Asynchronously, reads and generates the answer of the replication request.
+         * Once the execution of the request has finished, it calls the streamObserver methods
+         * If there is any failure it also calls onError method from the observer.
+         */
         Context forked = Context.current().fork();
         Context old = forked.attach();
         try {
@@ -185,7 +191,10 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         String key = request.getKey();
         Response response;
 
-        // Set ctx as the current context within the Runnable
+        /** Asynchronously, deletes and generates the answer of the replication request.
+         * Once the execution of the request has finished, it calls the streamObserver methods
+         * If there is any failure it also calls onError method from the observer.
+         */
         Context forked = Context.current().fork();
         Context old = forked.attach();
         try {
@@ -212,10 +221,13 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         Memory.put(key, value);
         KeyValuePair request = KeyValuePair.newBuilder().setKey(key).setValue(value).build();
         List<Response> results = new ArrayList<Response>();
+        // Countdown to know if results are ready or timout 20s
         final CountDownLatch finishLatch = new CountDownLatch(qwritesize - 1);
+        // Prepare the streamObserver actions per method
         StreamObserver<Response> responses = new StreamObserver<Response>() {
             @Override
             public void onNext(Response response) {
+                // if success save the result
                 logger.info("Replica written " + response.getSuccess());
                 if (response.getSuccess()) results.add(response);
             }
@@ -245,14 +257,13 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             } catch (InterruptedException e) {
                 logger.error("Quorum timer failed");
             }
-            // reach read quorum with matching values and issue client response
+            // reach write quorum and only then issue client response
             int quorum = 1;
             for (Response result : results) {
                 if (result.getSuccess()) {
                     quorum++;
                 }
             }
-            // reach write quorum and only then issue client response
             if (quorum >= qwritesize) {
                 logger.debug("Data replication reached quorum");
                 return true;
@@ -261,7 +272,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
                 return false;
             }
         } else
-            // But already issue response to client
+            // Already issue response to client
             return true;
     }
 
@@ -283,10 +294,13 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             return null;
         }
         if (qreadsize > 1) {
+            // Countdown to know if results are ready or timout 20s
             final CountDownLatch finishLatch = new CountDownLatch(qreadsize - 1);
+            // Prepare the streamObserver actions per method
             StreamObserver<Response> responses = new StreamObserver<Response>() {
                 @Override
                 public void onNext(Response response) {
+                    // if success save the result
                     logger.info("Received replica " + response.getSuccess());
                     if (response.getSuccess()) results.add(response);
                 }
@@ -313,6 +327,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
             } catch (InterruptedException e) {
                 logger.error("Quorum timer failed");
             }
+            // reach read quorum and check if the results are consistent, then answer client
             int quorum = 1;
             for (Response result : results) {
                 if (result.getSuccess() && data.equals(result.getValue())) {
@@ -323,7 +338,7 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
                 logger.debug("Giving client the requested data");
                 return KeyValuePair.newBuilder().setKey(key).setValue(data).build();
             } else {
-                logger.warn("Data is inconsistent");
+                logger.warn("Quorum has not been reached, data may be inconsistent");
                 return null;
             }
         } else {
@@ -336,14 +351,21 @@ public class QuorumImpl extends KeyValueStoreGrpc.KeyValueStoreImplBase {
         }
     }
 
+    /**
+     * Method to check if quorum replication has been achieved.
+     * <p>
+     */
     private boolean replicateDelete(String key) {
         Memory.delete(key);
         Key request = Key.newBuilder().setKey(key).build();
         List<Response> results = new ArrayList<Response>();
+        // Countdown to know if results are ready or timout 20s
         final CountDownLatch finishLatch = new CountDownLatch(qwritesize - 1);
+        // Prepare the streamObserver actions per method
         StreamObserver<Response> responses = new StreamObserver<Response>() {
             @Override
             public void onNext(Response response) {
+                // if success save the result
                 logger.info("Replica deleted " + response.getSuccess());
                 if (response.getSuccess()) results.add(response);
             }

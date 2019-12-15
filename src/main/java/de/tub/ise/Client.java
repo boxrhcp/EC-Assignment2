@@ -8,6 +8,7 @@ import io.grpc.StatusRuntimeException;
 import java.io.FileWriter;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
@@ -46,7 +47,7 @@ public class Client {
     }
 
     /**
-     * Example put request with synchronous gRPC interface {@code blockingStub}.
+     * Put request with synchronous gRPC interface {@code blockingStub}.
      */
     public boolean put(String key, String value) {
         //System.out.println("\nWriting data...");
@@ -62,7 +63,7 @@ public class Client {
     }
 
     /**
-     * Example get request.
+     *  Get request.
      */
     public boolean get(String key) {
         //System.out.println("\nGetting data... ");
@@ -77,6 +78,9 @@ public class Client {
         return response.getSuccess();
     }
 
+    /**
+     *  Delete request.
+     */
     public boolean delete(String key) {
         //System.out.println("\nGetting data... ");
         Key request = Key.newBuilder().setKey(key).build();
@@ -89,23 +93,28 @@ public class Client {
 
         return response.getSuccess();
     }
-
+    /**
+     *  Main will execute several calls and calculate the necessary statistics of the benchmarking.
+     *  It will generate a csv with the results.
+     */
     public static void main(String[] args) throws Exception {
         //no need to measure delete, no need to deal with inconsistencies
         String[] nodes = {"nodeA:3.121.220.11:8081", "nodeB:35.159.10.242:8082",
                 "nodeC:34.227.14.1:8083"};
         // Change client host and port accordingly
 
-        FileWriter csvWriter = new FileWriter("331-results.csv");
+        FileWriter csvWriter = new FileWriter("313-results.csv");
         csvWriter.append("Node access");
         csvWriter.append(",");
         csvWriter.append("Operation");
         csvWriter.append(",");
-        csvWriter.append("Max ms");
+        csvWriter.append("Maximum Latency");
         csvWriter.append(",");
-        csvWriter.append("Min ms");
+        csvWriter.append("Minimum Latency");
         csvWriter.append(",");
-        csvWriter.append("Average ms");
+        csvWriter.append("Average Latency");
+        csvWriter.append(",");
+        csvWriter.append("Latency Standard Deviation");
         csvWriter.append(",");
         csvWriter.append("Failures");
         csvWriter.append(",");
@@ -153,6 +162,8 @@ public class Client {
                 }
                 double avPut = (avgPut / iterations);
                 double avGet = (avgGet / iterations);
+                double putSD = standardDeviation(avPut, putLat);
+                double getSD = standardDeviation(avPut, getLat);
                 /*maxPut = maxPut/1_000_000_000;
                 minPut = minPut/1_000_000_000;
                 maxGet = maxGet/1_000_000_000;
@@ -176,6 +187,8 @@ public class Client {
                 csvWriter.append(",");
                 csvWriter.append("" + avPut);
                 csvWriter.append(",");
+                csvWriter.append("" + putSD);
+                csvWriter.append(",");
                 csvWriter.append("" + putFail);
                 csvWriter.append(",");
                 csvWriter.append("" + failRatioPut);
@@ -190,6 +203,8 @@ public class Client {
                 csvWriter.append(",");
                 csvWriter.append("" + avGet);
                 csvWriter.append(",");
+                csvWriter.append("" + getSD);
+                csvWriter.append(",");
                 csvWriter.append("" + getFail);
                 csvWriter.append(",");
                 csvWriter.append("" + failRatioGet);
@@ -200,5 +215,13 @@ public class Client {
         }
         csvWriter.flush();
         csvWriter.close();
+    }
+
+    private static double standardDeviation(double mean, long[] values){
+        double standardDeviation = 0.0;
+        for(long num: values) {
+            standardDeviation += Math.pow(num - mean, 2);
+        }
+        return Math.sqrt(standardDeviation/values.length);
     }
 }
